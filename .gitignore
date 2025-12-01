@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Virtual env
+.venv/
+venv/
+
+# Streamlit cache
+.streamlit/
+logs/
