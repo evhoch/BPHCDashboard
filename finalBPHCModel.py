@@ -319,9 +319,88 @@ def drop_high_covariance_features(df, threshold=0.8, target="Census_Men"):
 
 
 
+import numpy as np
+
+def bootstrap_ensemble_intervals(
+    best_xgb,
+    best_rf,
+    X_train,
+    y_train,
+    X_future,
+    n_bootstrap=200,
+    lower_q=0.05,
+    upper_q=0.95,
+    random_state=42,
+):
+    """
+    Compute bootstrap prediction intervals for the XGB+RF ensemble
+    without refitting the models.
+
+    Parameters
+    ----------
+    best_xgb : fitted XGBRegressor
+    best_rf  : fitted RandomForestRegressor
+    X_train  : pandas DataFrame or 2D array used for training
+    y_train  : pandas Series or 1D array of training targets
+    X_future : pandas DataFrame or 2D array for future predictions
+    n_bootstrap : int
+        Number of bootstrap paths (how many times we resample residuals).
+    lower_q, upper_q : float
+        Quantiles for the interval (e.g. 0.05 and 0.95 for a 90% band).
+    random_state : int
+        Seed for reproducibility.
+
+    Returns
+    -------
+    y_future_point : np.ndarray, shape (n_future,)
+        Point predictions from the ensemble.
+    lower : np.ndarray, shape (n_future,)
+        Lower quantile for each horizon.
+    upper : np.ndarray, shape (n_future,)
+        Upper quantile for each horizon.
+    """
+    rng = np.random.default_rng(random_state)
+
+    # 1) Point predictions on training data using your ensemble weights
+    y_pred_train = 0.35 * best_xgb.predict(X_train) + 0.65 * best_rf.predict(X_train)
+
+    # 2) Residuals = actual - predicted
+    y_resid = np.asarray(y_train) - y_pred_train
+    # Remove any NaNs just in case
+    y_resid = y_resid[~np.isnan(y_resid)]
+
+    if y_resid.size == 0:
+        # Fallback: no residuals (shouldn't really happen)
+        y_future_point = 0.35 * best_xgb.predict(X_future) + 0.65 * best_rf.predict(X_future)
+        return y_future_point, y_future_point.copy(), y_future_point.copy()
+
+    # 3) Base point predictions for the future
+    y_future_point = 0.35 * best_xgb.predict(X_future) + 0.65 * best_rf.predict(X_future)
+
+    n_future = X_future.shape[0]
+    # We'll store bootstrap samples as [n_bootstrap, n_future]
+    boot_samples = np.empty((n_bootstrap, n_future), dtype=float)
+
+    # 4) For each bootstrap replicate: add resampled residuals
+    for b in range(n_bootstrap):
+        # Sample residuals with replacement, one per future time point
+        noise = rng.choice(y_resid, size=n_future, replace=True)
+        boot_samples[b, :] = y_future_point + noise
+
+    # 5) Take quantiles across bootstrap dimension
+    lower = np.quantile(boot_samples, lower_q, axis=0)
+    upper = np.quantile(boot_samples, upper_q, axis=0)
+
+    return y_future_point, lower, upper
+
+
 
 # In[120]:
 
+
+from xgboost import XGBRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, TimeSeriesSplit
 
 def train_full_predict_future_tuned(clean_df, target_col="Census_Men", days_ahead=14):
     df = clean_df.copy().sort_values("Date").reset_index(drop=True)
@@ -331,47 +410,74 @@ def train_full_predict_future_tuned(clean_df, target_col="Census_Men", days_ahea
     X = train_df.drop(columns=["Date", f"{target_col}_future"])
     y = train_df[f"{target_col}_future"]
 
+    # Use only numeric features
     X = X.select_dtypes(include=[np.number])
-
-
-    #imputer = SimpleImputer(strategy="mean")
-    #X_imputed = imputer.fit_transform(X)
 
     #### XGB with GridSearchCV ####
     xgb = XGBRegressor(objective="reg:squarederror", random_state=42, n_jobs=-1)
     param_grid = {
         "n_estimators": [100, 200, 500],
-        "max_depth": [3, 5, 7]
+        "max_depth": [3, 5, 7],
     }
-    grid_search = GridSearchCV(xgb, param_grid, cv=5, scoring="neg_mean_squared_error", n_jobs=-1, verbose=1)
+    grid_search = GridSearchCV(
+        xgb,
+        param_grid,
+        cv=5,
+        scoring="neg_mean_squared_error",
+        n_jobs=-1,
+        verbose=1,
+    )
     grid_search.fit(X, y)
     best_xgb = grid_search.best_estimator_
 
     #### RF with RandomizedSearchCV ####
     rf = RandomForestRegressor(random_state=42, n_jobs=-1)
     param_dist = {
-        'n_estimators': [100, 200],
-        'max_depth': [5, 10, None],
-        'min_samples_leaf': [5, 10]
+        "n_estimators": [100, 200],
+        "max_depth": [5, 10, None],
+        "min_samples_leaf": [5, 10],
     }
     tscv = TimeSeriesSplit(n_splits=5)
-    rs = RandomizedSearchCV(rf, param_dist, n_iter=20, cv=tscv, scoring='neg_mean_squared_error',
-                            random_state=42, n_jobs=-1, verbose=1)
+    rs = RandomizedSearchCV(
+        rf,
+        param_dist,
+        n_iter=20,
+        cv=tscv,
+        scoring="neg_mean_squared_error",
+        random_state=42,
+        n_jobs=-1,
+        verbose=1,
+    )
     rs.fit(X, y)
     best_rf = rs.best_estimator_
 
     #### Predict future ####
     X_future = df.drop(columns=["Date", f"{target_col}_future"]).iloc[-days_ahead:]
     X_future_numeric = X_future.select_dtypes(include=[np.number])
-    #X_future_imputed = imputer.transform(X_future_numeric)
 
-    y_pred_xgb = best_xgb.predict(X_future_numeric)
-    y_pred_rf = best_rf.predict(X_future_numeric)
+    # --- New: bootstrap intervals around the ensemble ---
+    y_pred_point, y_lower, y_upper = bootstrap_ensemble_intervals(
+        best_xgb,
+        best_rf,
+        X_train=X,
+        y_train=y,
+        X_future=X_future_numeric,
+        n_bootstrap=200,   # you can tune this
+        lower_q=0.05,
+        upper_q=0.95,
+        random_state=42,
+    )
 
-    y_pred = 0.35*y_pred_xgb + 0.65*y_pred_rf
     last_dates = pd.to_datetime(df["Date"].iloc[-days_ahead:]) + pd.to_timedelta(days_ahead, unit="D")
 
-    predictions_df = pd.DataFrame({"Date": last_dates, "Predicted": np.round(y_pred,0)}).reset_index(drop=True)
+    # You can decide later exactly what to return; here’s one option:
+    predictions_df = pd.DataFrame({
+        "Date": last_dates,
+        "Predicted": np.round(y_pred_point, 0),
+        "Predicted_lower": np.round(y_lower, 0),
+        "Predicted_upper": np.round(y_upper, 0),
+    }).reset_index(drop=True)
+
     return predictions_df
 
 

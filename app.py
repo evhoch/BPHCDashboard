@@ -26,6 +26,14 @@ shelter_option = st.sidebar.selectbox(
     ["112 Southampton (Men's Shelter)", "Woods Mullen (Women's shelter)"]
 )
 
+if "Men" in shelter_option:
+    target_col = "Census_Men"
+elif "Women" in shelter_option:
+    target_col = "Census_Women"
+else:
+    st.error("Unknown shelter option")
+    st.stop()
+
 # Forecast horizon in days
 forecast_horizon_days = st.sidebar.slider(
     "Forecast horizon (days)",
@@ -43,7 +51,6 @@ uploaded_file = st.sidebar.file_uploader(
          "(e.g. Census_Men, Census_Women, etc.)."
 )
 
-# ---------- Load or simulate historical data ----------
 # ---------- Load historical data from uploaded CSV ----------
 if uploaded_file is not None:
     # Read the raw BPHC CSV
@@ -52,15 +59,11 @@ if uploaded_file is not None:
     # Make sure Date is datetime
     df_raw["Date"] = pd.to_datetime(df_raw["Date"])
 
-    # Build a simple historical_df for plotting/metrics
-    # (using Census_Men as "Shelter Guests" for now)
-    historical_df = df_raw[["Date", "Census_Men"]].rename(
-        columns={"Date": "date", "Census_Men": "Shelter Guests"}
+    # Build historical_df for plotting/metrics using the selected target_col
+    # target_col is "Census_Men" or "Census_Women"
+    historical_df = df_raw[["Date", target_col]].rename(
+        columns={"Date": "date", target_col: "Shelter Guests"}
     )
-
-    historical_df = df_raw[["Date", "Census_Men"]].rename(
-    columns={"Date": "date", "Census_Men": "Shelter Guests"}
-)
 
     # Use last 60 days to estimate variability
     hist_recent = historical_df.tail(60)
@@ -73,11 +76,12 @@ if uploaded_file is not None:
         three_months_ago = max_date - pd.Timedelta(days=60)
         hist_plot_df = historical_df[historical_df["date"] >= three_months_ago].copy()
 
-    # ---------- Forecast generation (via BPHC model) ----------
+            
+        # ---------- Forecast generation (via BPHC model) ----------
         model_forecast_df = make_shelter_forecast(
             df_raw,
             horizon_days=forecast_horizon_days,
-            target_col="Census_Men",
+            target_col=target_col,
         )
 
         # Start from whatever the model gave us
@@ -91,6 +95,7 @@ if uploaded_file is not None:
             forecast_df = forecast_df.rename(columns={"Date": "date"})
         else:
             st.error("Model output is missing a date column.")
+            st.write("Columns:", list(forecast_df.columns))
             st.stop()
 
         # --- Normalize the prediction column name to 'Shelter Guests' ---
@@ -106,13 +111,28 @@ if uploaded_file is not None:
             st.write("Columns:", list(forecast_df.columns))
             st.stop()
 
-        # --- Add trivial prediction bands so charts.py can compute shading ---
-        z = 1.0  # or 1.96 for ~95% if you want fatter bands
+        # --- Attach prediction bands ---
 
-        y_hat = forecast_df["Shelter Guests"]
+        # Case 1: bootstrap intervals are present from the model
+        if "Predicted_lower" in forecast_df.columns and "Predicted_upper" in forecast_df.columns:
+            # Rename to the standard names charts.py expects
+            forecast_df = forecast_df.rename(
+                columns={
+                    "Predicted_lower": "lower",
+                    "Predicted_upper": "upper",
+                }
+            )
+            # Ensure no negative guests
+            forecast_df["lower"] = forecast_df["lower"].clip(lower=0)
 
-        forecast_df["lower"] = (y_hat - z * sigma).clip(lower=0)
-        forecast_df["upper"] = y_hat + z * sigma
+        # Case 2: no bootstrap columns -> fall back to simple sigma-based band
+        else:
+            # z can be 1.96 for ~95% if you want
+            z = 1.0
+
+            y_hat = forecast_df["Shelter Guests"]
+            forecast_df["lower"] = (y_hat - z * sigma).clip(lower=0)
+            forecast_df["upper"] = y_hat + z * sigma
 
 
 
@@ -126,7 +146,8 @@ if uploaded_file is not None:
         # ---------- Main panel: Forecast & Historical Visualization ----------
         st.header(f"Forecast & Historical Shelter Guests — {shelter_option}")
 
-        fig = build_forecast_figure(plot_df, shelter_option)
+        fig = build_forecast_figure(plot_df, shelter_option, target_col)
+
         fig.update_yaxes(range=[0, None])
 
         st.plotly_chart(fig, width="stretch")
@@ -142,8 +163,6 @@ if uploaded_file is not None:
         st.table(summary_df)
 
         # ---------- Model & Diagnostics section ----------
-        st.header("Model & Diagnostics")
-
         st.header("Model & Diagnostics")
         st.caption("Details about the model and summary diagnostics based on recent history and the forecast horizon.")
 

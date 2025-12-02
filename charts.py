@@ -3,12 +3,17 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-def build_forecast_figure(plot_df: pd.DataFrame, shelter_name: str) -> go.Figure:
+def build_forecast_figure(
+    plot_df: pd.DataFrame,
+    shelter_name: str,
+    target_col: str,  # we still accept it, even if we don't need it inside
+) -> go.Figure:
     hist_plot = plot_df[plot_df["type"] == "Historical"]
-    fc_plot = plot_df[plot_df["type"] == "Forecast"]
+    fc_plot   = plot_df[plot_df["type"] == "Forecast"]
 
     fig = go.Figure()
 
+    # Historical: will be men or women depending on target_col used upstream
     fig.add_trace(
         go.Scatter(
             x=hist_plot["date"],
@@ -23,6 +28,7 @@ def build_forecast_figure(plot_df: pd.DataFrame, shelter_name: str) -> go.Figure
         )
     )
 
+    # Forecast with error bars
     fig.add_trace(
         go.Scatter(
             x=fc_plot["date"],
@@ -32,8 +38,8 @@ def build_forecast_figure(plot_df: pd.DataFrame, shelter_name: str) -> go.Figure
             error_y=dict(
                 type="data",
                 symmetric=False,
-                array=fc_plot["upper"] - fc_plot["Shelter Guests"],
-                arrayminus=fc_plot["Shelter Guests"] - fc_plot["lower"],
+                array=(fc_plot["upper"] - fc_plot["Shelter Guests"]),
+                arrayminus=(fc_plot["Shelter Guests"] - fc_plot["lower"]),
                 visible=True,
             ),
             hovertemplate=(
@@ -44,7 +50,8 @@ def build_forecast_figure(plot_df: pd.DataFrame, shelter_name: str) -> go.Figure
                 "Upper: %{customdata[1]:.1f}<extra></extra>"
             ),
             customdata=np.stack(
-                [fc_plot["lower"].values, fc_plot["upper"].values], axis=-1
+                [fc_plot["lower"].values, fc_plot["upper"].values],
+                axis=-1,
             ),
         )
     )
@@ -54,18 +61,10 @@ def build_forecast_figure(plot_df: pd.DataFrame, shelter_name: str) -> go.Figure
         height=400,
         xaxis_title="Date",
         yaxis_title="Shelter Guests",
-        yaxis=dict(range=[0, None]),
+        yaxis=dict(rangemode="tozero"),
         legend_title_text="Series",
         hovermode="x unified",
         margin=dict(l=40, r=20, t=40, b=40),
     )
-
-    fig.update_yaxes(range=[0, None])
-    # Force y-axis to start at zero
-    fig.update_yaxes(rangemode="tozero")
-    fig.update_layout(yaxis=dict(rangemode="tozero"))
-
-
-
 
     return fig
