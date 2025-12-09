@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
+import time 
 
 from data_utils import load_historical_data
-# from model_pipeline import make_dummy_forecast  # <- no longer used
 from charts import build_forecast_figure
 from metrics_utils import compute_forecast_summary
 
-from finalBPHCModel import make_shelter_forecast
+from Jiao_DL_Linear_ import make_dl_forecast
 
 
 # ---------- Page config ----------
@@ -61,9 +61,12 @@ if uploaded_file is not None:
 
     # Build historical_df for plotting/metrics using the selected target_col
     # target_col is "Census_Men" or "Census_Women"
-    historical_df = df_raw[["Date", target_col]].rename(
+    historical_df = df_raw[["Date", target_col]].dropna().rename(
         columns={"Date": "date", target_col: "Shelter Guests"}
     )
+    
+    # Optional: Sort by date just to be safe
+    historical_df = historical_df.sort_values("date")
 
     # Use last 60 days to estimate variability
     hist_recent = historical_df.tail(60)
@@ -78,14 +81,23 @@ if uploaded_file is not None:
 
             
         # ---------- Forecast generation (via BPHC model) ----------
-        model_forecast_df = make_shelter_forecast(
+        confidence_level=0.80
+
+        start_time = time.time()
+
+        model_forecast_df, model_metrics = make_dl_forecast(
             df_raw,
             horizon_days=forecast_horizon_days,
             target_col=target_col,
+            lookback=30,  # You can change this lookback window if needed
+            confidence_level=confidence_level
         )
+        end_time = time.time()
+        training_duration = end_time - start_time
 
         # Start from whatever the model gave us
         forecast_df = model_forecast_df.copy()
+
 
         # --- Normalize the date column name ---
         if "date" in forecast_df.columns:
@@ -127,6 +139,7 @@ if uploaded_file is not None:
 
         # Case 2: no bootstrap columns -> fall back to simple sigma-based band
         else:
+            print("No confidence level, using sigma!")
             # z can be 1.96 for ~95% if you want
             z = 1.0
 
@@ -171,49 +184,44 @@ if uploaded_file is not None:
         with col1:
             st.subheader("Model Info")
             st.write(f"**Selected shelter:** {shelter_option}")
-            st.write("**Model:** BPHC RF + XGBoost ensemble")
-            st.write("**Training status:** Loaded from integrated script")
+            st.write("**Model:** DL Linear (PyTorch)")
+            st.write(f"**Training time:** {training_duration:.2f} seconds") 
+            st.write("**Training status:** Retrained live on uploaded data")
 
         with col2:
             st.subheader("Diagnostics")
 
-            # Use last 60 days of history for basic stats
-            if len(historical_df) >= 1:
-                recent_hist = historical_df.tail(60)
-
-                hist_mean = recent_hist["Shelter Guests"].mean()
-                hist_std  = recent_hist["Shelter Guests"].std()
-                last_actual = historical_df["Shelter Guests"].iloc[-1]
+            # Extract metrics from the model_metrics dictionary we returned
+            test_rmse = model_metrics.get("test_RMSE", 0)
+            test_mae  = model_metrics.get("test_MAE", 0)
+            conf_lvl  = model_metrics.get("confidence_level", 0.90) * 100
+            
+            # Calculate "Average Margin of Error" from the forecast dataframe itself
+            # (Upper Band - Prediction) averaged over the horizon
+            if "upper" in forecast_df.columns and "Shelter Guests" in forecast_df.columns:
+                avg_width = (forecast_df["upper"] - forecast_df["Shelter Guests"]).mean()
             else:
-                hist_mean = float("nan")
-                hist_std = float("nan")
-                last_actual = float("nan")
-
-            # Forecast stats over the selected horizon
-            if len(forecast_df) >= 1:
-                fc_mean = forecast_df["Shelter Guests"].mean()
-                fc_min  = forecast_df["Shelter Guests"].min()
-                fc_max  = forecast_df["Shelter Guests"].max()
-            else:
-                fc_mean = fc_min = fc_max = float("nan")
+                avg_width = 0
 
             diag_df = pd.DataFrame({
                 "Metric": [
-                    "Last actual census",
-                    "Historical mean (last 60 days)",
-                    "Historical std (last 60 days)",
-                    f"Forecast mean (next {forecast_horizon_days} days)",
-                    "Forecast min (next horizon)",
-                    "Forecast max (next horizon)",
+                    "Test Set RMSE", 
+                    "Test Set MAE", 
+                    "Confidence Level",
+                    "Avg. Margin of Error (+/-)"
                 ],
                 "Value": [
-                    f"{last_actual:.1f}",
-                    f"{hist_mean:.1f}",
-                    f"{hist_std:.1f}",
-                    f"{fc_mean:.1f}",
-                    f"{fc_min:.1f}",
-                    f"{fc_max:.1f}",
+                    f"{test_rmse:.2f}",
+                    f"{test_mae:.2f}",
+                    f"{conf_lvl:.0f}%", 
+                    f"{avg_width:.1f} guests"
                 ],
+                "Description": [
+                    "Root Mean Squared Error on unseen test data",
+                    "Average absolute error on unseen test data",
+                    "Probability that true value is within bands",
+                    "Average width of the error band for this forecast"
+                ]
             })
 
             st.table(diag_df)
