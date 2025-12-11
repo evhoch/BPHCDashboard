@@ -343,6 +343,7 @@ def preprocess_shelter_df(
 
     # 5) Fill NAs in key numeric features
     df_no_na = fill_NA_features(df_no_cov)
+    print("Hello!")
 
     return df_no_na
 
