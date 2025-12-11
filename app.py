@@ -7,6 +7,7 @@ from charts import build_forecast_figure
 from metrics_utils import compute_forecast_summary
 
 from Jiao_DL_Linear_ import make_dl_forecast
+from Ensemble_and_ARIMA import make_classical_forecast
 
 
 # ---------- Page config ----------
@@ -85,12 +86,10 @@ if uploaded_file is not None:
 
         start_time = time.time()
 
-        model_forecast_df, model_metrics = make_dl_forecast(
+        model_forecast_df, model_metrics = make_classical_forecast(
             df_raw,
-            horizon_days=forecast_horizon_days,
-            target_col=target_col,
-            lookback=30,  # You can change this lookback window if needed
-            confidence_level=confidence_level
+            days_ahead=forecast_horizon_days,
+            target_col=target_col
         )
         end_time = time.time()
         training_duration = end_time - start_time
@@ -184,20 +183,20 @@ if uploaded_file is not None:
         with col1:
             st.subheader("Model Info")
             st.write(f"**Selected shelter:** {shelter_option}")
-            st.write("**Model:** DL Linear (PyTorch)")
+            st.write("**Model:** ARIMA + XGBoost Ensemble")
             st.write(f"**Training time:** {training_duration:.2f} seconds") 
             st.write("**Training status:** Retrained live on uploaded data")
 
         with col2:
             st.subheader("Diagnostics")
 
-            # Extract metrics from the model_metrics dictionary we returned
-            test_rmse = model_metrics.get("test_RMSE", 0)
-            test_mae  = model_metrics.get("test_MAE", 0)
-            conf_lvl  = model_metrics.get("confidence_level", 0.90) * 100
-            
-            # Calculate "Average Margin of Error" from the forecast dataframe itself
-            # (Upper Band - Prediction) averaged over the horizon
+            # Extract from new model_metrics format
+            rmse_last  = model_metrics.get("RMSE_last_1000", 0)
+            c66_last   = model_metrics.get("c66_last_1000", 0)
+            c95_last   = model_metrics.get("c95_last_1000", 0)
+            score_val  = model_metrics.get("score", 0)
+
+            # Compute average margin of error from forecast_df
             if "upper" in forecast_df.columns and "Shelter Guests" in forecast_df.columns:
                 avg_width = (forecast_df["upper"] - forecast_df["Shelter Guests"]).mean()
             else:
@@ -205,26 +204,30 @@ if uploaded_file is not None:
 
             diag_df = pd.DataFrame({
                 "Metric": [
-                    "Test Set RMSE", 
-                    "Test Set MAE", 
-                    "Confidence Level",
-                    "Avg. Margin of Error (+/-)"
+                    "RMSE (last 1000 pts)",
+                    "C66 Coverage (last 1000 pts)",
+                    "C95 Coverage (last 1000 pts)",
+                    #"Model Score",
+                    "Avg. Margin of Error (+/-)",
                 ],
                 "Value": [
-                    f"{test_rmse:.2f}",
-                    f"{test_mae:.2f}",
-                    f"{conf_lvl:.0f}%", 
-                    f"{avg_width:.1f} guests"
+                    f"{rmse_last:.2f}",
+                    f"{c66_last:.1f}%",
+                    f"{c95_last:.1f}%",
+                    #f"{score_val:.2f}",
+                    f"{avg_width:.1f} guests",
                 ],
                 "Description": [
-                    "Root Mean Squared Error on unseen test data",
-                    "Average absolute error on unseen test data",
-                    "Probability that true value is within bands",
-                    "Average width of the error band for this forecast"
-                ]
+                    "RMSE over the last 1000 evaluation points",
+                    "Percent of points falling inside 66% prediction band",
+                    "Percent of points falling inside 95% prediction band",
+                    #"Custom model scoring function",
+                    "Average width of the forecast error band",
+                ],
             })
 
             st.table(diag_df)
+
 
 
 
