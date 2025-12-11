@@ -385,7 +385,7 @@ def backtest_ensemble_and_forecast(
     future_col = f"{target_col}_future"
     df_model[future_col] = df_model[target_col].shift(-days_ahead)
     df_model = df_model.dropna(subset=[future_col]).reset_index(drop=True)
-
+    print(1.1)
     # split train / test
     if len(df_model) <= n_test:
         n_test = max(1, len(df_model) // 3)
@@ -400,13 +400,14 @@ def backtest_ensemble_and_forecast(
     X_test = test_df.drop(columns=["Date", future_col])
     X_test = X_test.select_dtypes(include=[np.number])
     y_test = test_df[future_col].values
-
+    print(1.2)
     # train XGB
     xgb = XGBRegressor(objective="reg:squarederror", random_state=42, n_jobs=-1)
     param_grid = {
         "n_estimators": [100, 200],
         "max_depth": [3, 5, 7]
     }
+    print(1.3)
     grid_search = GridSearchCV(
         xgb,
         param_grid,
@@ -415,10 +416,12 @@ def backtest_ensemble_and_forecast(
         n_jobs=-1,
         verbose=0
     )
+    print(1.4)
     grid_search.fit(X_train, y_train)
     best_xgb = grid_search.best_estimator_
 
     # train RF
+    print(1.5)
     rf = RandomForestRegressor(random_state=42, n_jobs=-1)
     param_dist = {
         "n_estimators": [100, 200],
@@ -436,6 +439,7 @@ def backtest_ensemble_and_forecast(
         n_jobs=-1,
         verbose=0
     )
+    print(1.6)
     rs.fit(X_train, y_train)
     best_rf = rs.best_estimator_
 
@@ -445,7 +449,7 @@ def backtest_ensemble_and_forecast(
     y_pred_test     = 0.35 * y_pred_test_xgb + 0.65 * y_pred_test_rf
 
     rmse_ens, c66_ens, c95_ens = compute_rmse_and_c(y_test, y_pred_test, n_last=n_test)
-
+    print(1.7)
     # forecast next 14 days
     X_future = df_model.drop(columns=["Date", future_col]).iloc[-days_ahead:]
     X_future_num = X_future.select_dtypes(include=[np.number])
@@ -453,7 +457,7 @@ def backtest_ensemble_and_forecast(
     y_pred_future_xgb = best_xgb.predict(X_future_num)
     y_pred_future_rf  = best_rf.predict(X_future_num)
     y_pred_future     = 0.35 * y_pred_future_xgb + 0.65 * y_pred_future_rf
-
+    print(1.8)
     last_dates = pd.to_datetime(df_model["Date"].iloc[-days_ahead:]) + pd.to_timedelta(days_ahead, unit="D")
 
     forecast_df = pd.DataFrame(
@@ -645,7 +649,7 @@ def make_classical_forecast(
         diff_threshold=100,
         covariance_threshold=0.8
     )
-
+    print(1)
     # ensemble
     ens_forecast, rmse_ens, c66_ens, c95_ens = backtest_ensemble_and_forecast(
         df_clean,
@@ -653,7 +657,7 @@ def make_classical_forecast(
         days_ahead=days_ahead,
         n_test=n_test
     )
-    print(1)
+    print(1.9)
     score_ens = model_score(rmse_ens, c66_ens)
     print(2)
 
