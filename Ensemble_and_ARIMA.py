@@ -429,7 +429,7 @@ def backtest_ensemble_and_forecast(
     rs = RandomizedSearchCV(
         rf,
         param_dist,
-        n_iter=20,
+        n_iter=12,
         cv=tscv,
         scoring="neg_mean_squared_error",
         random_state=42,
