@@ -385,7 +385,6 @@ def backtest_ensemble_and_forecast(
     future_col = f"{target_col}_future"
     df_model[future_col] = df_model[target_col].shift(-days_ahead)
     df_model = df_model.dropna(subset=[future_col]).reset_index(drop=True)
-    print(1.1)
     # split train / test
     if len(df_model) <= n_test:
         n_test = max(1, len(df_model) // 3)
@@ -400,21 +399,21 @@ def backtest_ensemble_and_forecast(
     X_test = test_df.drop(columns=["Date", future_col])
     X_test = X_test.select_dtypes(include=[np.number])
     y_test = test_df[future_col].values
-    print(1.2)
+   
     # train XGB
     xgb = XGBRegressor(objective="reg:squarederror", random_state=42, n_jobs=-1)
     param_grid = {
         "n_estimators": [100, 200],
         "max_depth": [3, 5, 7]
     }
-    print(1.3)
+
     grid_search = GridSearchCV(
         xgb,
         param_grid,
-        cv=5,
+        cv=2,
         scoring="neg_mean_squared_error",
-        n_jobs=-1,
-        verbose=0
+        n_jobs=1,
+        verbose=1
     )
     print(1.4)
     grid_search.fit(X_train, y_train)
