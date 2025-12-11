@@ -418,6 +418,7 @@ def backtest_ensemble_and_forecast(
     )
     print(1.4)
     grid_search.fit(X_train, y_train)
+    print(1.45)
     best_xgb = grid_search.best_estimator_
 
     # train RF
