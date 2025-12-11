@@ -260,7 +260,7 @@ def fill_NA_features(df, cols=None):
             before = df[col].isna().sum()
             df[col] = df[col].ffill().bfill()
             after = df[col].isna().sum()
-            print(f"[fill_NA_features] {col}: filled {before - after} values (remaining: {after})")
+            #print(f"[fill_NA_features] {col}: filled {before - after} values (remaining: {after})")
         else:
             print(f"[fill_NA_features] Column {col} not found in dataframe.")
 
@@ -368,119 +368,146 @@ def compute_rmse_and_c(y_true, y_pred, n_last=1000):
 
     return rmse, c_66, c_95
 
+import time
+import numpy as np
+import pandas as pd
+from sklearn.metrics import mean_squared_error
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+
 def backtest_ensemble_and_forecast(
     df_clean,
     target_col="Census_Men",
     days_ahead=14,
-    n_test=1000
+    n_test=1000,
 ):
     """
-    Backtest RF+XGB ensemble on last n_test targets and produce a 14 day forecast.
-    Returns: forecast_df, rmse, c66, c95
+    FAST VERSION for Streamlit:
+
+    - No hyperparameter search (fixed XGB + RF)
+    - Optional cap on training rows
+    - Still returns: forecast_df, rmse_ens, c66_ens, c95_ens
     """
 
+    print("\n[Ensemble] Starting backtest_ensemble_and_forecast", flush=True)
+    t0 = time.time()
+
+    # --- Prepare modeling dataframe ---
     df_model = df_clean.copy().sort_values("Date").reset_index(drop=True)
     df_model["Date"] = pd.to_datetime(df_model["Date"])
-
     future_col = f"{target_col}_future"
+
+    # shift target days_ahead into the future
     df_model[future_col] = df_model[target_col].shift(-days_ahead)
+
+    # keep only rows where future target is known
     df_model = df_model.dropna(subset=[future_col]).reset_index(drop=True)
-    # split train / test
-    if len(df_model) <= n_test:
-        n_test = max(1, len(df_model) // 3)
+
+    # numeric features only (exclude date + future target)
+    X_all = df_model.drop(columns=["Date", future_col])
+    X_all = X_all.select_dtypes(include=[np.number])
+
+    # align back
+    df_model = pd.concat(
+        [df_model[["Date", future_col]].reset_index(drop=True),
+         X_all.reset_index(drop=True)],
+        axis=1
+    )
+
+    # --- Train / test split for backtest ---
+    n_rows = len(df_model)
+    if n_rows <= n_test:
+        n_test = max(1, n_rows // 3)
 
     train_df = df_model.iloc[:-n_test].copy()
     test_df  = df_model.iloc[-n_test:].copy()
 
     X_train = train_df.drop(columns=["Date", future_col])
-    X_train = X_train.select_dtypes(include=[np.number])
     y_train = train_df[future_col].values
 
     X_test = test_df.drop(columns=["Date", future_col])
-    X_test = X_test.select_dtypes(include=[np.number])
     y_test = test_df[future_col].values
-   
-    # train XGB
-    xgb = XGBRegressor(objective="reg:squarederror", random_state=42, n_jobs=-1)
-    param_grid = {
-        "n_estimators": [100, 200],
-        "max_depth": [3, 5, 7]
-    }
 
-    grid_search = GridSearchCV(
-        xgb,
-        param_grid,
-        cv=2,
-        scoring="neg_mean_squared_error",
-        n_jobs=1,
-        verbose=1
+    # --- Optional cap on training rows for speed ---
+    max_train_rows = 2000  # tune if needed
+    if len(X_train) > max_train_rows:
+        X_train_xgb = X_train.iloc[-max_train_rows:]
+        y_train_xgb = y_train[-max_train_rows:]
+        X_train_rf  = X_train.iloc[-max_train_rows:]
+        y_train_rf  = y_train[-max_train_rows:]
+        print(f"[Ensemble] Capped training rows at {max_train_rows}", flush=True)
+    else:
+        X_train_xgb = X_train
+        y_train_xgb = y_train
+        X_train_rf  = X_train
+        y_train_rf  = y_train
+
+    # --- Train XGB (fixed hyperparams, CPU-only) ---
+    t_xgb = time.time()
+    xgb = XGBRegressor(
+        objective="reg:squarederror",
+        random_state=42,
+        n_estimators=150,
+        max_depth=5,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        n_jobs=1,   # IMPORTANT for Streamlit
     )
-    print(1.4)
-    grid_search.fit(X_train, y_train)
-    print(1.45)
-    best_xgb = grid_search.best_estimator_
+    xgb.fit(X_train_xgb, y_train_xgb)
+    print(f"[Ensemble] XGB fit in {time.time() - t_xgb:.2f} sec", flush=True)
 
-    # train RF
-    print(1.5)
-    #########################################
-    # rf = RandomForestRegressor(random_state=42, n_jobs=-1)
-    # param_dist = {
-    #     "n_estimators": [100, 200],
-    #     "max_depth": [5, 10, None],
-    #     "min_samples_leaf": [5, 10],
-    # }
-    # tscv = TimeSeriesSplit(n_splits=5)
-    # rs = RandomizedSearchCV(
-    #     rf,
-    #     param_dist,
-    #     n_iter=12,
-    #     cv=tscv,
-    #     scoring="neg_mean_squared_error",
-    #     random_state=42,
-    #     n_jobs=-1,
-    #     verbose=0
-    # )
-    # print(1.6)
-    # rs.fit(X_train, y_train)
-    # best_rf = rs.best_estimator_
-    ##############################
-    # dummy replacement
-    best_rf = RandomForestRegressor(
-    random_state=42,
-    n_estimators=100,
-    max_depth=10,
-    min_samples_leaf=5,
-    n_jobs=1,
-)
-    best_rf.fit(X_train, y_train)
-    print(1.6, "RF fit done")
+    # --- Train RF (fixed hyperparams, CPU-only) ---
+    t_rf = time.time()
+    rf = RandomForestRegressor(
+        random_state=42,
+        n_estimators=150,
+        max_depth=10,
+        min_samples_leaf=5,
+        n_jobs=1,   # IMPORTANT for Streamlit
+    )
+    rf.fit(X_train_rf, y_train_rf)
+    print(f"[Ensemble] RF fit in {time.time() - t_rf:.2f} sec", flush=True)
 
-    ###################################
-    # backtest predictions
-    y_pred_test_xgb = best_xgb.predict(X_test)
-    y_pred_test_rf  = best_rf.predict(X_test)
+    # --- Backtest predictions on test_df ---
+    y_pred_test_xgb = xgb.predict(X_test)
+    y_pred_test_rf  = rf.predict(X_test)
     y_pred_test     = 0.35 * y_pred_test_xgb + 0.65 * y_pred_test_rf
 
-    rmse_ens, c66_ens, c95_ens = compute_rmse_and_c(y_test, y_pred_test, n_last=n_test)
-    print(1.7)
-    # forecast next 14 days
+    # your existing error helper
+    rmse_ens, c66_ens, c95_ens = compute_rmse_and_c(
+        y_test,
+        y_pred_test,
+        n_last=n_test
+    )
+    print(
+        f"[Ensemble] Backtest done in {time.time() - t0:.2f} sec "
+        f"(RMSE={rmse_ens:.2f}, C66={c66_ens:.2f}, C95={c95_ens:.2f})",
+        flush=True
+    )
+
+    # --- Forecast next days_ahead days with the ensemble ---
+    # Use the last `days_ahead` rows of features to predict days_ahead ahead
     X_future = df_model.drop(columns=["Date", future_col]).iloc[-days_ahead:]
     X_future_num = X_future.select_dtypes(include=[np.number])
 
-    y_pred_future_xgb = best_xgb.predict(X_future_num)
-    y_pred_future_rf  = best_rf.predict(X_future_num)
+    y_pred_future_xgb = xgb.predict(X_future_num)
+    y_pred_future_rf  = rf.predict(X_future_num)
     y_pred_future     = 0.35 * y_pred_future_xgb + 0.65 * y_pred_future_rf
-    print(1.8)
-    last_dates = pd.to_datetime(df_model["Date"].iloc[-days_ahead:]) + pd.to_timedelta(days_ahead, unit="D")
+
+    last_dates = pd.to_datetime(df_model["Date"].iloc[-days_ahead:])
+    future_dates = last_dates + pd.to_timedelta(days_ahead, unit="D")
 
     forecast_df = pd.DataFrame(
         {
-            "date": last_dates,
-            "Shelter Guests": np.round(y_pred_future, 0)
+            "date": future_dates.dt.tz_localize(None),
+            "Shelter Guests": np.round(y_pred_future, 0),
         }
     ).reset_index(drop=True)
 
+    print(f"[Ensemble] Total ensemble time: {time.time() - t0:.2f} sec\n", flush=True)
     return forecast_df, rmse_ens, c66_ens, c95_ens
+
 
 
 def ar_trend_backtest_and_forecast(
