@@ -422,27 +422,40 @@ def backtest_ensemble_and_forecast(
 
     # train RF
     print(1.5)
-    rf = RandomForestRegressor(random_state=42, n_jobs=-1)
-    param_dist = {
-        "n_estimators": [100, 200],
-        "max_depth": [5, 10, None],
-        "min_samples_leaf": [5, 10],
-    }
-    tscv = TimeSeriesSplit(n_splits=5)
-    rs = RandomizedSearchCV(
-        rf,
-        param_dist,
-        n_iter=12,
-        cv=tscv,
-        scoring="neg_mean_squared_error",
-        random_state=42,
-        n_jobs=-1,
-        verbose=0
-    )
-    print(1.6)
-    rs.fit(X_train, y_train)
-    best_rf = rs.best_estimator_
+    #########################################
+    # rf = RandomForestRegressor(random_state=42, n_jobs=-1)
+    # param_dist = {
+    #     "n_estimators": [100, 200],
+    #     "max_depth": [5, 10, None],
+    #     "min_samples_leaf": [5, 10],
+    # }
+    # tscv = TimeSeriesSplit(n_splits=5)
+    # rs = RandomizedSearchCV(
+    #     rf,
+    #     param_dist,
+    #     n_iter=12,
+    #     cv=tscv,
+    #     scoring="neg_mean_squared_error",
+    #     random_state=42,
+    #     n_jobs=-1,
+    #     verbose=0
+    # )
+    # print(1.6)
+    # rs.fit(X_train, y_train)
+    # best_rf = rs.best_estimator_
+    ##############################
+    # dummy replacement
+    best_rf = RandomForestRegressor(
+    random_state=42,
+    n_estimators=100,
+    max_depth=10,
+    min_samples_leaf=5,
+    n_jobs=1,
+)
+    best_rf.fit(X_train, y_train)
+    print(1.6, "RF fit done")
 
+    ###################################
     # backtest predictions
     y_pred_test_xgb = best_xgb.predict(X_test)
     y_pred_test_rf  = best_rf.predict(X_test)
