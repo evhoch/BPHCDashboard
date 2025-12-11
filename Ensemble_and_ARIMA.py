@@ -642,39 +642,55 @@ def model_score(rmse, c66):
     return 1.0 * rmse + 1.0 * c66
 
 
+import time
+import numpy as np
+
 def make_classical_forecast(
     df_raw,
     target_col="Census_Men",
     days_ahead=14,
     n_test=1000
 ):
-    """
-    Cleans raw data, runs ensemble and ARIMA models,
-    compares them on last n_test days, and returns:
-      forecast_df (14 rows with date, Shelter Guests, lower, upper, model name)
-      metrics dict with rmse and c for best model.
-    """
+    print("\n=== make_classical_forecast START ===", flush=True)
+    t0 = time.time()
 
-    # clean once
+    # -------------------------
+    # 1. CLEANING
+    # -------------------------
+    print("Step 1: Cleaning data...", flush=True)
+    t_clean = time.time()
     df_clean = preprocess_shelter_df(
         df_raw,
         target_col=target_col,
         diff_threshold=100,
         covariance_threshold=0.8
     )
-    print(1)
-    # ensemble
+    print(f" → Cleaning complete in {time.time() - t_clean:.2f} sec", flush=True)
+
+    # -------------------------
+    # 2. ENSEMBLE MODEL
+    # -------------------------
+    print("Step 2: Running Ensemble (RF + XGB)...", flush=True)
+    t_ens = time.time()
     ens_forecast, rmse_ens, c66_ens, c95_ens = backtest_ensemble_and_forecast(
         df_clean,
         target_col=target_col,
         days_ahead=days_ahead,
         n_test=n_test
     )
-    print(1.9)
-    score_ens = model_score(rmse_ens, c66_ens)
-    print(2)
+    print(
+        f" → Ensemble complete in {time.time() - t_ens:.2f} sec "
+        f"(RMSE={rmse_ens:.2f}, C66={c66_ens:.2f}, C95={c95_ens:.2f})",
+        flush=True
+    )
 
-    # AR trend backtest and forecast (single function)
+    score_ens = model_score(rmse_ens, c66_ens)
+
+    # -------------------------
+    # 3. AR LASSO MODEL
+    # -------------------------
+    print("Step 3: Running AR Lasso Model...", flush=True)
+    t_ar = time.time()
     ar_forecast, rmse_arima, c66_arima, c95_arima = ar_trend_backtest_and_forecast(
         df_clean,
         target_col=target_col,
@@ -684,28 +700,50 @@ def make_classical_forecast(
         alpha=0.1,
         n_last=n_test
     )
-    print(3)
+    print(
+        f" → AR Lasso complete in {time.time() - t_ar:.2f} sec "
+        f"(RMSE={rmse_arima:.2f}, C66={c66_arima:.2f}, C95={c95_arima:.2f})",
+        flush=True
+    )
+
     score_arima = model_score(rmse_arima, c66_arima)
 
-
+    # -------------------------
+    # 4. SELECT BEST MODEL
+    # -------------------------
+    print("Step 4: Selecting best model...", flush=True)
     if score_ens <= score_arima:
         best_name = "ensemble_RF_XGB"
         best_forecast = ens_forecast.copy()
         best_rmse = rmse_ens
         best_c66 = c66_ens
         best_c95 = c95_ens
+        print(" → Selected: ENSEMBLE", flush=True)
     else:
         best_name = "arima_lasso"
         best_forecast = ar_forecast.copy()
         best_rmse = rmse_arima
         best_c66 = c66_arima
         best_c95 = c95_arima
+        print(" → Selected: AR LASSO", flush=True)
 
-    # add simple error band using c95
-    best_forecast["Predicted_lower"] = np.round(np.maximum(best_forecast["Shelter Guests"] - best_c66, 0), 0)
-    best_forecast["Predicted_upper"] = np.round(best_forecast["Shelter Guests"] + best_c66, 0)
+    # -------------------------
+    # 5. CREATE ERROR BANDS
+    # -------------------------
+    print("Step 5: Adding error bands...", flush=True)
+    t_band = time.time()
+    best_forecast["Predicted_lower"] = np.round(
+        np.maximum(best_forecast["Shelter Guests"] - best_c66, 0), 0
+    )
+    best_forecast["Predicted_upper"] = np.round(
+        best_forecast["Shelter Guests"] + best_c66, 0
+    )
     best_forecast["Model"] = best_name
+    print(f" → Bands added in {time.time() - t_band:.2f} sec", flush=True)
 
+    # -------------------------
+    # 6. BUILD METRICS OUTPUT
+    # -------------------------
     metrics = {
         "model": best_name,
         "RMSE_last_1000": best_rmse,
@@ -713,5 +751,10 @@ def make_classical_forecast(
         "c95_last_1000": best_c95,
         "score": model_score(best_rmse, best_c66),
     }
+
+    print(
+        f"=== make_classical_forecast DONE in {time.time() - t0:.2f} sec ===\n",
+        flush=True
+    )
 
     return best_forecast, metrics
