@@ -343,7 +343,6 @@ def preprocess_shelter_df(
 
     # 5) Fill NAs in key numeric features
     df_no_na = fill_NA_features(df_no_cov)
-    print("Hello!")
 
     return df_no_na
 
@@ -654,7 +653,9 @@ def make_classical_forecast(
         days_ahead=days_ahead,
         n_test=n_test
     )
+    print(1)
     score_ens = model_score(rmse_ens, c66_ens)
+    print(2)
 
     # AR trend backtest and forecast (single function)
     ar_forecast, rmse_arima, c66_arima, c95_arima = ar_trend_backtest_and_forecast(
@@ -666,6 +667,7 @@ def make_classical_forecast(
         alpha=0.1,
         n_last=n_test
     )
+    print(3)
     score_arima = model_score(rmse_arima, c66_arima)
 
 
