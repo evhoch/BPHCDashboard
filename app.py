@@ -93,6 +93,7 @@ if uploaded_file is not None:
         )
         end_time = time.time()
         training_duration = end_time - start_time
+        print(f"training time: {training_duration}")
 
         # Start from whatever the model gave us
         forecast_df = model_forecast_df.copy()
